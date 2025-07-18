@@ -167,6 +167,12 @@ logs/
 *.sqlite3
 *.json
 !config/*.json
+!archive/**/*.json
+
+# Archive directory - keep structure but ignore very large files
+archive/sessions/*.json
+archive/analysis/*.txt
+archive/development/*/large_data/*
 
 # Node.js dependencies
 node_modules/

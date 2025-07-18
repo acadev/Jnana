@@ -1,0 +1,36 @@
+{
+  "hypothesis": {
+    "title": "Synaptic Pruning Dysfunction in Autism Spectrum Disorders",
+    "description": "Aberrant microglial-mediated synaptic pruning during critical developmental periods contributes to the altered connectivity patterns observed in autism spectrum disorders, and modulating complement cascade activity could provide therapeutic benefits",
+    "research_domain": "neuroscience",
+    "condition": "autism_spectrum_disorder", 
+    "mechanism": "synaptic_pruning",
+    "cell_types": ["microglia", "neurons"],
+    "molecular_targets": ["complement_c1q", "complement_c3", "cx3cr1"],
+    "developmental_stage": "critical_period",
+    "therapeutic_potential": "high",
+    "evidence_level": "preclinical",
+    "key_findings": [
+      "Increased microglial activation in ASD brain tissue",
+      "Altered complement protein expression in ASD models",
+      "Synaptic pruning defects in mouse models of ASD",
+      "CX3CR1 knockout mice show ASD-like behaviors"
+    ],
+    "proposed_experiments": [
+      "Single-cell RNA sequencing of microglia in ASD brain tissue",
+      "Complement inhibition studies in ASD mouse models",
+      "Longitudinal imaging of synaptic pruning in development",
+      "Pharmacological modulation of microglial activity"
+    ],
+    "clinical_relevance": "Could lead to early intervention strategies for ASD",
+    "generated_timestamp": "2025-01-12T16:45:00Z",
+    "confidence_score": 0.75
+  },
+  "metadata": {
+    "source": "wisteria_neuroscience_module",
+    "generation_method": "literature_synthesis",
+    "review_status": "pending",
+    "biomni_analysis_requested": true,
+    "priority": "high"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "research_data": {
+    "session_id": "cancer_immuno_002",
+    "created_at": "2025-01-12T14:15:00Z",
+    "research_focus": "Novel cancer immunotherapy approaches"
+  },
+  "generated_hypotheses": [
+    {
+      "hypothesis_id": "car_t_001",
+      "research_question": "Can engineered CAR-T cells overcome solid tumor resistance?",
+      "hypothesis_text": "Fourth-generation CAR-T cells engineered with IL-12 secretion and PD-1 knockout can overcome the immunosuppressive tumor microenvironment in solid tumors, leading to sustained anti-tumor responses",
+      "biological_domain": "cancer_immunotherapy",
+      "tumor_type": "solid_tumors",
+      "approach": "car_t_engineering",
+      "novelty_score": 0.9,
+      "feasibility_score": 0.7,
+      "supporting_evidence": [
+        "IL-12 enhances T-cell activation and persistence",
+        "PD-1 knockout prevents T-cell exhaustion",
+        "Armored CAR-T cells show improved efficacy in preclinical models"
+      ]
+    },
+    {
+      "hypothesis_id": "checkpoint_002", 
+      "research_question": "What combination therapies can enhance checkpoint inhibitor efficacy?",
+      "hypothesis_text": "Combining anti-PD-1 therapy with STING agonists and tumor-associated antigen vaccines can create a synergistic immune response that overcomes checkpoint inhibitor resistance in melanoma",
+      "biological_domain": "cancer_immunotherapy",
+      "tumor_type": "melanoma",
+      "approach": "combination_therapy",
+      "novelty_score": 0.8,
+      "feasibility_score": 0.85,
+      "supporting_evidence": [
+        "STING activation enhances dendritic cell function",
+        "Vaccines can broaden T-cell repertoire",
+        "Combination approaches show promise in clinical trials"
+      ]
+    }
+  ],
+  "analysis_metadata": {
+    "total_generated": 2,
+    "avg_novelty_score": 0.85,
+    "avg_feasibility_score": 0.775,
+    "research_categories": ["immunotherapy", "cancer_biology", "translational_medicine"],
+    "verification_status": "pending_biomni"
+  }
+}
