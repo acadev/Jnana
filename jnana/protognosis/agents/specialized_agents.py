@@ -423,8 +423,9 @@ class ReflectionAgent(Agent):
         """Perform an initial review of a hypothesis."""
         self.logger.info(f"Performing initial review for task {task.task_id}")
         
-        # Get hypothesis
+        # Get hypothesis and research context
         hypothesis_id = task.params.get("hypothesis_id")
+        research_goal = self.memory.metadata.get("research_goal", "")
         if not hypothesis_id:
             raise ValueError("No hypothesis_id provided for review task")
         
@@ -1030,12 +1031,15 @@ class RankingAgent(Agent):
             winner_id = None
             loser_id = None
             
-            if response["overall_winner"] == "A":
+            winner_label = str(response["overall_winner"]).strip().upper()
+            if winner_label in {"A", "HYPOTHESIS A"}:
                 winner_id = hypothesis1_id
                 loser_id = hypothesis2_id
-            elif response["overall_winner"] == "B":
+            elif winner_label in {"B", "HYPOTHESIS B"}:
                 winner_id = hypothesis2_id
                 loser_id = hypothesis1_id
+            else:
+                winner_label = "tie"
             
             # Only update Elo if there's a clear winner
             if winner_id and loser_id:
@@ -1060,7 +1064,7 @@ class RankingAgent(Agent):
                 "hypothesis1_id": hypothesis1_id,
                 "hypothesis2_id": hypothesis2_id,
                 "criteria_comparison": response["criteria_comparison"],
-                "overall_winner": response["overall_winner"],
+                "overall_winner": winner_label,
                 "reasoning": response["reasoning"],
                 "winner_key_advantages": response["winner_key_advantages"],
                 "loser_key_weaknesses": response["loser_key_weaknesses"]
@@ -1083,7 +1087,7 @@ class RankingAgent(Agent):
                 "match_id": match_result["match_id"],
                 "hypothesis1_id": hypothesis1_id,
                 "hypothesis2_id": hypothesis2_id,
-                "winner": response["overall_winner"],
+                "winner": winner_label,
                 "hypothesis1_new_rating": hypothesis1.elo_rating,
                 "hypothesis2_new_rating": hypothesis2.elo_rating
             }

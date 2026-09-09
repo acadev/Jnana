@@ -97,9 +97,6 @@ class LLMInterface(ABC):
 """
 Fixed implementation of the AnthropicLLM class based on the latest Anthropic API requirements.
 """
-import os
-from typing import Dict, List, Optional, Any, Union
-import anthropic
 
 class AnthropicLLM(LLMInterface):
     """Interface for Anthropic Claude models."""
@@ -298,13 +295,16 @@ class GeminiLLM(LLMInterface):
 class OpenAILLM(LLMInterface):
     """Implementation for OpenAI's API."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o", model_adapter: Optional[Dict] = None):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o",
+                 base_url: Optional[str] = None, model_adapter: Optional[Dict] = None):
         """
-        Initialize the OpenAI LLM interface.
+        Initialize the OpenAI-compatible LLM interface.
 
         Args:
-            api_key: OpenAI API key (defaults to OPENAI_API_KEY env variable)
+            api_key: API key (defaults to OPENAI_API_KEY env variable)
             model: Model identifier to use
+            base_url: Optional OpenAI-compatible API base URL (for example,
+                ``https://host.example/v1``). If omitted, use OpenAI's default.
             model_adapter: Optional configuration for model adaptation
         """
         super().__init__(model, model_adapter)
@@ -312,7 +312,11 @@ class OpenAILLM(LLMInterface):
         if not self.api_key:
             raise ValueError("No OpenAI API key provided")
 
-        self.client = openai.OpenAI(api_key=self.api_key)
+        self.base_url = base_url.rstrip("/") if base_url else None
+        client_kwargs = {"api_key": self.api_key}
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        self.client = openai.OpenAI(**client_kwargs)
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None,
                  temperature: float = 0.7, max_tokens: int = 1024) -> str:
@@ -330,6 +334,17 @@ class OpenAILLM(LLMInterface):
             temperature=temperature,
             max_tokens=max_tokens
         )
+
+        try:
+            prompt_tokens = response.usage.prompt_tokens
+            completion_tokens = response.usage.completion_tokens
+        except AttributeError:
+            # Some OpenAI-compatible gateways omit usage metadata.
+            prompt_tokens = 0
+            completion_tokens = 0
+        self.total_calls += 1
+        self.total_prompt_tokens += prompt_tokens
+        self.total_completion_tokens += completion_tokens
 
         return response.choices[0].message.content
 
@@ -350,13 +365,15 @@ class OpenAILLM(LLMInterface):
         messages = [{"role": "system", "content": system}]
         messages.append({"role": "user", "content": full_prompt})
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"}
-        )
+        request = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": (self.model_adapter or {}).get("json_max_tokens", max_tokens),
+            "response_format": {"type": "json_object"}
+        }
+        if not (self.model_adapter or {}).get("omit_temperature", False):
+            request["temperature"] = temperature
+        response = self.client.chat.completions.create(**request)
 
         # Extract JSON string and parse
         import json
@@ -364,9 +381,10 @@ class OpenAILLM(LLMInterface):
             content = response.choices[0].message.content
             parsed_response = json.loads(content)
 
-            # Get token counts from OpenAI response
-            prompt_tokens = response.usage.prompt_tokens
-            completion_tokens = response.usage.completion_tokens
+            # Get token counts from OpenAI-compatible responses when available.
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
 
             self.total_calls += 1
             self.total_prompt_tokens += prompt_tokens
@@ -753,7 +771,12 @@ def create_llm(provider: str, api_key: Optional[str] = None, model: Optional[str
         if openai is None:
             raise ImportError("OpenAI package is not installed. Please install it with 'pip install openai'.")
         model = model or "gpt-4o"
-        llm = OpenAILLM(api_key=api_key, model=model, model_adapter=model_adapter)
+        llm = OpenAILLM(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            model_adapter=model_adapter
+        )
     elif provider == "ollama":
         model = model or "llama3"
         ollama_url = base_url or "http://localhost:11434"

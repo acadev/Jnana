@@ -245,6 +245,7 @@ class JnanaProtoGnosisAdapter:
                 provider=default_config.get("provider", "openai"),
                 model=default_config.get("model", "gpt-4o"),
                 api_key=default_config.get("api_key"),
+                base_url=default_config.get("base_url"),
                 temperature=default_config.get("temperature", 0.7),
                 max_tokens=default_config.get("max_tokens", 1024)
             )
@@ -261,6 +262,7 @@ class JnanaProtoGnosisAdapter:
                             provider=agent_config.get("provider", default_llm_config.provider),
                             model=agent_config.get("model", default_llm_config.model),
                             api_key=agent_config.get("api_key", default_llm_config.api_key),
+                            base_url=agent_config.get("base_url", default_llm_config.base_url),
                             temperature=agent_config.get("temperature", default_llm_config.temperature),
                             max_tokens=agent_config.get("max_tokens", default_llm_config.max_tokens)
                         )
