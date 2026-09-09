@@ -699,7 +699,8 @@ class SupervisorAgent:
         self.agent_types[agent.agent_type].append(agent.agent_id)
         self.logger.info(f"Registered agent {agent.agent_id} of type {agent.agent_type}")
     
-    def get_usages(self, verbose=True):
+    def get_usages(self, verbose=True, output_path: Optional[str] = "./model_usages.json"):
+        """Return aggregate usage and optionally write it to a JSON file."""
         total_calls = {"supervisor": self.total_calls}
         total_prompt_tokens = {"supervisor": self.total_prompt_tokens}
         total_completion_tokens = {"supervisor": self.total_completion_tokens}
@@ -715,8 +716,9 @@ class SupervisorAgent:
             "total_completion_tokens": total_completion_tokens
         }
 
-        with open("./model_usages.json", "w") as f:
-            json.dump(result_payload, f)
+        if output_path:
+            with open(output_path, "w") as f:
+                json.dump(result_payload, f)
 
         if verbose:
             self.logger.info("Total model usages:")

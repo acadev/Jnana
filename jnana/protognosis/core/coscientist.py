@@ -265,6 +265,9 @@ class CoScientist:
 
         # Store in memory
         self.memory.set_research_goal(research_goal, research_plan)
+        # Specialized agents consume this key when selecting evaluation criteria.
+        self.memory.metadata["research_plan_config"] = research_plan
+        self.memory.save()
 
         self.logger.info("Research goal set and parsed")
         return research_plan
@@ -288,8 +291,9 @@ class CoScientist:
         """
         self.supervisor.wait_for_all_tasks(timeout)
 
-    def get_agent_usages(self, verbose=True):
-        return self.supervisor.get_usages(verbose=verbose)
+    def get_agent_usages(self, verbose=True, output_path: Optional[str] = None):
+        """Return aggregate agent usage, optionally persisting it to a JSON file."""
+        return self.supervisor.get_usages(verbose=verbose, output_path=output_path)
 
     def get_all_hypotheses(self):
         """
