@@ -55,7 +55,7 @@ class ResearchHypothesis:
         # Tournament tracking attributes
         self.tournament_wins = 0
         self.tournament_losses = 0
-        self.last_tournament_time = None
+        self.last_tournament_time: Optional[float] = None
     
     def add_review(self, review: Dict):
         """Add a review to this hypothesis."""

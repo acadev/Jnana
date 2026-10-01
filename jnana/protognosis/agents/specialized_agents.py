@@ -1070,11 +1070,22 @@ class RankingAgent(Agent):
                 "loser_key_weaknesses": response["loser_key_weaknesses"]
             }
             
-            # Add the match result to both hypotheses
+            # Add the match result to both hypotheses and maintain the
+            # aggregate record exposed through the Jnana data converter.
+            # A tie is recorded as a match without a win/loss adjustment.
+            match_timestamp = time.time()
             hypothesis1.add_tournament_match(match_result)
             hypothesis2.add_tournament_match(match_result)
-            
-            # Update hypotheses in memory
+            hypothesis1.last_tournament_time = match_timestamp
+            hypothesis2.last_tournament_time = match_timestamp
+            if winner_id == hypothesis1_id:
+                hypothesis1.tournament_wins += 1
+                hypothesis2.tournament_losses += 1
+            elif winner_id == hypothesis2_id:
+                hypothesis2.tournament_wins += 1
+                hypothesis1.tournament_losses += 1
+
+            # Update hypotheses in memory.
             self.memory.update_hypothesis(hypothesis1)
             self.memory.update_hypothesis(hypothesis2)
             

@@ -767,7 +767,9 @@ def create_llm(provider: str, api_key: Optional[str] = None, model: Optional[str
             raise ImportError("Google Generative AI package is not installed. Please install it with 'pip install google-generativeai'.")
         model = model or "gemini-1.5-pro"
         llm = GeminiLLM(api_key=api_key, model=model, model_adapter=model_adapter)
-    elif provider == "openai":
+    # Default OpenAI-compatible provider. Use an arbitrary ``base_url`` for a
+    # custom inference service; this name is intentionally provider-agnostic.
+    elif provider in {"openai", "openai_compatible", "custom"}:
         if openai is None:
             raise ImportError("OpenAI package is not installed. Please install it with 'pip install openai'.")
         model = model or "gpt-4o"
