@@ -72,16 +72,21 @@ def run_incremental_tournament(
         statistics = coscientist.get_statistics()
         coscientist.memory.save()
         after_matches = len(coscientist.memory.tournament_state.get("matches", []))
-        return {
-            "status": "completed",
+        matches_completed = after_matches - before_matches
+        status = "completed" if matches_completed == match_count else "incomplete"
+        result = {
+            "status": status,
             "hypothesis_count": hypothesis_count,
             "matches_requested": match_count,
-            "matches_completed": after_matches - before_matches,
+            "matches_completed": matches_completed,
             "top_hypotheses": [
                 _compact_hypothesis(hypothesis)
                 for hypothesis in coscientist.get_top_hypotheses(top_k)
             ],
             "statistics": statistics,
         }
+        if status == "incomplete":
+            result["reason"] = "scheduled tournament matches did not complete"
+        return result
     finally:
         coscientist.stop()

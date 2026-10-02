@@ -328,12 +328,14 @@ class OpenAILLM(LLMInterface):
 
         messages.append({"role": "user", "content": prompt})
 
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
+        request = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+        }
+        if not (self.model_adapter or {}).get("omit_temperature", False):
+            request["temperature"] = temperature
+        response = self.client.chat.completions.create(**request)
 
         try:
             prompt_tokens = response.usage.prompt_tokens

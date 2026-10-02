@@ -247,7 +247,8 @@ class JnanaProtoGnosisAdapter:
                 api_key=default_config.get("api_key"),
                 base_url=default_config.get("base_url"),
                 temperature=default_config.get("temperature", 0.7),
-                max_tokens=default_config.get("max_tokens", 1024)
+                max_tokens=default_config.get("max_tokens", 1024),
+                model_adapter=default_config.get("model_adapter"),
             )
             
             # Create agent-specific configs if available
@@ -264,7 +265,8 @@ class JnanaProtoGnosisAdapter:
                             api_key=agent_config.get("api_key", default_llm_config.api_key),
                             base_url=agent_config.get("base_url", default_llm_config.base_url),
                             temperature=agent_config.get("temperature", default_llm_config.temperature),
-                            max_tokens=agent_config.get("max_tokens", default_llm_config.max_tokens)
+                            max_tokens=agent_config.get("max_tokens", default_llm_config.max_tokens),
+                            model_adapter=agent_config.get("model_adapter", default_llm_config.model_adapter),
                         )
                 except:
                     # Use default config if agent-specific config not available

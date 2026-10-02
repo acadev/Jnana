@@ -906,12 +906,12 @@ class SupervisorAgent:
         """
 
         try:
-            # Generate the research plan
-            config = self.llm.generate_with_json_output(prompt, schema)
-            
-            # Add the original research goal to the config
+            # Provider implementations return payload plus usage accounting.
+            result = self.llm.generate_with_json_output(prompt, schema)
+            config = result[0] if isinstance(result, tuple) else result
+            if not isinstance(config, dict):
+                raise ValueError("research plan response is not an object")
             config["original_research_goal"] = research_goal
-            
             return config
         except Exception as e:
             self.logger.error(f"Error parsing research goal: {str(e)}")

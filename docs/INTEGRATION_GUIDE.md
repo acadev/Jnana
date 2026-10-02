@@ -201,6 +201,11 @@ default:
   model: "gpt-4o"
   api_key: "${OPENAI_API_KEY}"
 
+  # For OpenAI-compatible models that reject a non-default temperature:
+  model_adapter:
+    omit_temperature: true
+    json_max_tokens: 1024
+
 # ProtoGnosis agent configurations
 agents:
   generation:
