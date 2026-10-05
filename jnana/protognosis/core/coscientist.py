@@ -16,6 +16,7 @@ from ..agents.specialized_agents import (
     GenerationAgent, ReflectionAgent, RankingAgent,
     EvolutionAgent, ProximityAgent, MetaReviewAgent
 )
+from ..agents.laya_ranking_agent import LayaRankingAgent
 from .multi_llm_config import LLMConfig, AgentLLMConfig
 
 class CoScientist:
@@ -157,9 +158,10 @@ class CoScientist:
             self.supervisor.register_agent(agent)
             self._initialize_agent_state(agent)
 
-        # Ranking agent
+        # Laya is the tournament judge. It retains the ``ranking`` agent type so
+        # existing tournament tasks are routed to it without changing task APIs.
         llm = self._get_llm_for_agent("ranking", "ranking-0")
-        ranking_agent = RankingAgent("ranking-0", llm, self.memory)
+        ranking_agent = LayaRankingAgent("laya-0", llm, self.memory)
         self.supervisor.register_agent(ranking_agent)
         self._initialize_agent_state(ranking_agent)
 

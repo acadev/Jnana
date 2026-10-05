@@ -1021,7 +1021,9 @@ class RankingAgent(Agent):
         }
         
         try:
-            response, prompt_tokens, completion_tokens = self.llm.generate_with_json_output(prompt, schema, system_prompt=system_prompt)
+            response, prompt_tokens, completion_tokens = await self._judge_match(
+                hypothesis1, hypothesis2, research_goal, criteria, prompt, schema, system_prompt
+            )
             
             self.total_calls += 1
             self.total_prompt_tokens += prompt_tokens
@@ -1069,6 +1071,10 @@ class RankingAgent(Agent):
                 "winner_key_advantages": response["winner_key_advantages"],
                 "loser_key_weaknesses": response["loser_key_weaknesses"]
             }
+            if response.get("decision_engine"):
+                match_result["decision_engine"] = response["decision_engine"]
+            if response.get("confidence") is not None:
+                match_result["confidence"] = response["confidence"]
             
             # Add the match result to both hypotheses and maintain the
             # aggregate record exposed through the Jnana data converter.
@@ -1106,6 +1112,16 @@ class RankingAgent(Agent):
         except Exception as e:
             self.logger.error(f"Error conducting tournament match: {str(e)}")
             raise
+
+    async def _judge_match(self, hypothesis1, hypothesis2, research_goal, criteria,
+                           prompt, schema, system_prompt):
+        """Return a normalized match judgment and token counts."""
+        response_data = self.llm.generate_with_json_output(
+            prompt, schema, system_prompt=system_prompt
+        )
+        if isinstance(response_data, tuple) and len(response_data) == 3:
+            return response_data
+        return response_data, 0, 0
     
     async def _update_rankings(self, task: Task) -> Dict:
         """Update the overall rankings based on Elo ratings."""

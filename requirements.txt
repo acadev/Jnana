@@ -67,3 +67,6 @@ faiss-cpu>=1.8.0
 # ProtoGnosis integration (integrated directly)
 # Note: ProtoGnosis is now integrated directly into Jnana
 # No additional dependencies required for core functionality
+
+# Calibrated tournament match decisions
+laya>=0.3.27,<0.4
