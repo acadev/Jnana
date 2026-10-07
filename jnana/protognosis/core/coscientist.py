@@ -247,6 +247,37 @@ class CoScientist:
         self.supervisor.register_agent(agent)
         self.logger.info(f"Registered custom agent: {agent.agent_id} ({agent.agent_type})")
 
+    def configure_laya_judges(self, routers, aggregation_policy="majority_confidence_tiebreak"):
+        """Configure one or more Laya models on the native ranking agent.
+
+        ``routers`` may contain router objects or mappings with ``name``,
+        ``router``, optional positive ``weight``, and JSON-serializable
+        ``provenance``. The ranking agent remains registered under the native
+        ``ranking`` type, so tournament scheduling and persistence are unchanged.
+        """
+        ranking_ids = self.supervisor.agent_types.get("ranking", [])
+        agent = self.supervisor.agents[ranking_ids[0]] if ranking_ids else None
+        if not isinstance(agent, LayaRankingAgent):
+            raise RuntimeError("The registered ranking agent is not LayaRankingAgent")
+        agent.configure_routers(routers, aggregation_policy=aggregation_policy)
+        self.memory.metadata["laya_judging"] = {
+            "agent_id": agent.agent_id,
+            "aggregation_policy": aggregation_policy,
+            "models": [
+                {
+                    "name": spec["name"], "weight": float(spec["weight"]),
+                    "provenance": spec["provenance"],
+                }
+                for spec in agent._router_specs()
+            ],
+        }
+        self.memory.save()
+        self.logger.info(
+            "Configured %d Laya judge(s) with %s",
+            len(agent._router_specs()), aggregation_policy,
+        )
+        return agent
+
     def set_research_goal(self, research_goal: str) -> Dict:
         """
         Set the research goal for the system.

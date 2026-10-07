@@ -221,3 +221,121 @@ def test_jnana_adapter_preserves_model_adapter() -> None:
     config = JnanaProtoGnosisAdapter(ModelManager())._convert_model_config()
 
     assert config.default.model_adapter == {"omit_temperature": True}
+
+
+class ChoiceLayaRouter:
+    def __init__(self, choice, confidence):
+        self.choice = choice
+        self.confidence = confidence
+        self.batch_calls = 0
+
+    def predict_batch(self, requests, **_kwargs):
+        self.batch_calls += 1
+        return [{
+            "answers": {
+                "criterion_0": {"choice": self.choice, "answer_confidence": self.confidence},
+                "overall_winner": {"choice": self.choice, "answer_confidence": self.confidence},
+            }
+        } for _ in requests]
+
+    def predict(self, _state, _questions, **_kwargs):
+        return self.predict_batch([None])[0]
+
+
+def ensemble_fixture(tmp_path, routers, policy="majority_confidence_tiebreak"):
+    state = tmp_path / "ensemble.json"
+    memory = ContextMemory(str(state))
+    memory.metadata["research_plan_config"] = {"evaluation_criteria": ["testability"]}
+    first = ResearchHypothesis("A", "First", "agent", hypothesis_id="a")
+    second = ResearchHypothesis("B", "Second", "agent", hypothesis_id="b")
+    memory.add_hypothesis(first)
+    memory.add_hypothesis(second)
+    agent = LayaRankingAgent(
+        "laya-ensemble", FixedWinnerLLM(), memory, routers=routers,
+        aggregation_policy=policy,
+    )
+    return state, memory, first, second, agent
+
+
+def test_laya_ensemble_majority_and_provenance_are_persisted(tmp_path: Path) -> None:
+    models = [
+        {"name": "calibrated", "router": ChoiceLayaRouter("A", .60),
+         "provenance": {"checkpoint": "step-1500"}},
+        {"name": "tournament", "router": ChoiceLayaRouter("B", .90),
+         "provenance": {"checkpoint": "step-2200"}},
+        {"name": "balanced", "router": ChoiceLayaRouter("B", .70),
+         "provenance": {"checkpoint": "step-2400"}},
+    ]
+    state, _memory, first, second, agent = ensemble_fixture(tmp_path, models)
+    match = agent.judge_batch([(first, second)], batch_size=4)[0]
+
+    assert match["overall_winner"] == "B"
+    assert match["decision_engine"] == "laya_ensemble"
+    assert match["aggregation"]["resolution"] == "majority_vote"
+    assert match["aggregation"]["vote_counts"] == {"A": 1, "B": 2}
+    assert [item["name"] for item in match["model_judgments"]] == [
+        "calibrated", "tournament", "balanced"
+    ]
+    assert match["model_judgments"][1]["provenance"]["checkpoint"] == "step-2200"
+    assert all(item["router"].batch_calls == 1 for item in models)
+    assert first.tournament_losses == 1 and second.tournament_wins == 1
+    persisted = json.loads(state.read_text())
+    assert persisted["tournament_state"]["matches"][0]["model_judgments"] == match["model_judgments"]
+
+
+def test_laya_ensemble_confidence_breaks_equal_vote_count(tmp_path: Path) -> None:
+    models = [
+        {"name": "a", "router": ChoiceLayaRouter("A", .55), "weight": 1.0},
+        {"name": "b", "router": ChoiceLayaRouter("B", .80), "weight": 1.0},
+    ]
+    _state, _memory, first, second, agent = ensemble_fixture(tmp_path, models)
+    match = agent.judge_batch([(first, second)])[0]
+    assert match["overall_winner"] == "B"
+    assert match["aggregation"]["resolution"] == "confidence_weighted_tiebreak"
+
+
+def test_laya_ensemble_exact_tie_does_not_change_elo(tmp_path: Path) -> None:
+    models = [
+        {"name": "a", "router": ChoiceLayaRouter("A", .75)},
+        {"name": "b", "router": ChoiceLayaRouter("B", .75)},
+    ]
+    _state, _memory, first, second, agent = ensemble_fixture(tmp_path, models)
+    match = agent.judge_batch([(first, second)])[0]
+    assert match["overall_winner"] == "tie"
+    assert match["aggregation"]["resolution"] == "unresolved_tie"
+    assert first.elo_rating == second.elo_rating == 1200
+    assert first.tournament_wins == second.tournament_wins == 0
+
+
+def test_laya_ensemble_unanimous_policy_abstains_on_disagreement(tmp_path: Path) -> None:
+    models = [ChoiceLayaRouter("A", .99), ChoiceLayaRouter("B", .51)]
+    _state, _memory, first, second, agent = ensemble_fixture(
+        tmp_path, models, policy="unanimous"
+    )
+    match = agent.judge_batch([(first, second)])[0]
+    assert match["overall_winner"] == "tie"
+    assert match["aggregation"]["policy"] == "unanimous"
+
+
+def test_coscientist_configures_and_persists_laya_ensemble(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("jnana.protognosis.core.coscientist.create_llm", lambda *_a, **_k: FixedWinnerLLM())
+    from jnana.protognosis.core.coscientist import CoScientist
+
+    state = tmp_path / "coscientist.json"
+    coscientist = CoScientist(
+        llm_config=LLMConfig(provider="openai", model="unused", api_key="unused"),
+        storage_path=str(state), max_workers=1,
+    )
+    agent = coscientist.configure_laya_judges([
+        {"name": "one", "router": ChoiceLayaRouter("A", .7),
+         "provenance": {"checkpoint": "step-1500"}},
+        {"name": "two", "router": ChoiceLayaRouter("B", .8),
+         "provenance": {"checkpoint": "step-2200"}},
+    ], aggregation_policy="unanimous")
+
+    assert isinstance(agent, LayaRankingAgent)
+    persisted = json.loads(state.read_text())
+    config = persisted["metadata"]["laya_judging"]
+    assert config["aggregation_policy"] == "unanimous"
+    assert [item["name"] for item in config["models"]] == ["one", "two"]
+    assert "router" not in config["models"][0]

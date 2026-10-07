@@ -97,9 +97,15 @@ def run_incremental_tournament(
 
 def run_batched_laya_tournament(
     *, state_file: str | Path, llm_config: LLMConfig, match_count: int = 1,
-    top_k: int = 3, batch_size: int | None = None,
+    top_k: int = 3, batch_size: int | None = None, routers=None,
+    aggregation_policy: str = "majority_confidence_tiebreak",
 ) -> dict[str, Any]:
-    """Batch Laya inference, then apply Elo/state changes deterministically."""
+    """Batch one or more Laya models, then apply native state changes serially.
+
+    ``routers`` is an optional sequence accepted by
+    :class:`LayaRankingAgent`. When omitted, the existing lazy single-router
+    behavior is unchanged.
+    """
     if match_count < 0:
         raise ValueError("match_count must be non-negative")
     if top_k < 1:
@@ -116,6 +122,8 @@ def run_batched_laya_tournament(
     agent = coscientist.supervisor.agents[ranking_ids[0]] if ranking_ids else None
     if not isinstance(agent, LayaRankingAgent):
         raise RuntimeError("The registered ranking agent is not LayaRankingAgent")
+    if routers is not None:
+        agent.configure_routers(routers, aggregation_policy=aggregation_policy)
     pairs = [tuple(random.sample(hypotheses, 2)) for _ in range(match_count)]
     before = len(coscientist.memory.tournament_state.get("matches", []))
     if pairs:
@@ -133,6 +141,8 @@ def run_batched_laya_tournament(
         "status": "completed" if completed == match_count else "incomplete",
         "hypothesis_count": len(hypotheses), "matches_requested": match_count,
         "matches_completed": completed, "inference_mode": "laya.predict_batch",
-        "batch_size": batch_size,
+        "batch_size": batch_size, "model_count": len(agent._router_specs()),
+        "aggregation_policy": (agent.aggregation_policy if routers is not None
+                               else "single_model"),
         "top_hypotheses": [_compact_hypothesis(h.to_dict()) for h in rankings[:top_k]],
     }
