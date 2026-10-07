@@ -71,6 +71,33 @@ python jnana.py --mode batch --goal "Your research question here" --count 20
 python jnana.py --mode hybrid --goal "Your research question here" --interactive-refinement
 ```
 
+### Fine-tuned Laya weights from GitHub
+
+The `laya` branch can download the private scientific-Laya release through the
+GitHub CLI, verify each asset's size and SHA-256 digest, and cache it locally.
+Authentication stays in `gh`; Jnana does not read or persist the token.
+
+```bash
+# One-time setup
+pip install -e '.[laya-checkpoints]'
+gh auth login
+
+# Download the recommended three-checkpoint ensemble and the pinned base model
+python -m jnana.protognosis.agents.laya_github_weights \
+  --steps 1500 2200 2400
+
+# Download only the balanced default checkpoint
+python -m jnana.protognosis.agents.laya_github_weights \
+  --steps 2400
+
+# Register the downloaded ensemble with native CoScientist
+python examples/laya_github_ensemble.py
+```
+
+The default cache is `~/.cache/jnana/laya`. Existing checkpoints are reused only
+after checksum verification. Use `--cache-dir` to choose another location,
+`--base-model` to reuse an existing base model, or `--force` to redownload.
+
 ## Project Structure
 
 ```

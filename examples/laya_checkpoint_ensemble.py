@@ -55,3 +55,10 @@ coscientist.configure_laya_judges(
     aggregation_policy="majority_confidence_tiebreak",
 )
 print(coscientist.memory.metadata["laya_judging"])
+
+# Private GitHub release alternative
+# ----------------------------------
+# If the Lambda archive is unavailable, authenticate once with `gh auth login`
+# and run `examples/laya_github_ensemble.py`. Jnana will download the three
+# release assets, verify their SHA-256 hashes, cache them under
+# ~/.cache/jnana/laya, and build the same router specifications.
