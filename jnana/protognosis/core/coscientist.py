@@ -282,14 +282,20 @@ class CoScientist:
         self.supervisor.stop()
         self.logger.info("Co-Scientist system stopped")
 
-    def wait_for_completion(self, timeout: Optional[float] = None):
+    def wait_for_completion(self, timeout: Optional[float] = None) -> bool:
         """
         Wait for all current tasks to complete.
 
         Args:
-            timeout: Optional timeout in seconds
+            timeout: Optional timeout in seconds. None waits indefinitely, and
+                on a running ensemble that can mean forever -- the agents
+                enqueue their own follow-up work. Pass a budget whenever the
+                caller has a deadline.
+
+        Returns:
+            True if the queue drained, False if the timeout expired first.
         """
-        self.supervisor.wait_for_all_tasks(timeout)
+        return self.supervisor.wait_for_all_tasks(timeout)
 
     def get_agent_usages(self, verbose=True, output_path: Optional[str] = None):
         """Return aggregate agent usage, optionally persisting it to a JSON file."""

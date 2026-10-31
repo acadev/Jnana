@@ -827,15 +827,43 @@ class SupervisorAgent:
         self.workers = []
         self.logger.info("Supervisor stopped")
     
-    def wait_for_all_tasks(self, timeout: Optional[float] = None):
+    def wait_for_all_tasks(self, timeout: Optional[float] = None) -> bool:
         """
         Wait for all tasks in the queue to be processed.
-        
+
         Args:
-            timeout: Optional timeout in seconds
+            timeout: Optional timeout in seconds. None waits indefinitely.
+
+        Returns:
+            True if the queue drained, False if the timeout expired first.
+
+        The timeout was previously accepted and then ignored: the body called
+        ``self.task_queue.join()`` unconditionally, and ``Queue.join()`` takes
+        no timeout, so every caller that passed one still blocked forever.
+        That matters because the agent ensemble enqueues its own follow-up
+        work, so on a live system this queue may never drain -- measured
+        2026-10-31, a caller asking for one more tournament match sat here for
+        30+ minutes while the ranking, evolution and reflection agents kept
+        refilling it, and the round never progressed past this call.
         """
-        self.task_queue.join()
-        self.logger.info("All tasks completed")
+
+        if timeout is None:
+            self.task_queue.join()
+            self.logger.info("All tasks completed")
+            return True
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.task_queue.unfinished_tasks == 0:
+                self.logger.info("All tasks completed")
+                return True
+            time.sleep(0.5)
+        self.logger.warning(
+            "wait_for_all_tasks timed out after %.0fs with %d task(s) unfinished; "
+            "returning so the caller can proceed with partial results",
+            timeout, self.task_queue.unfinished_tasks,
+        )
+        return False
     
     def calculate_statistics(self) -> Dict:
         """
