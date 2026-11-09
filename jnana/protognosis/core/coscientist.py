@@ -350,7 +350,8 @@ class CoScientist:
     # Include the standard methods from the original CoScientist class here
     # They don't need to be modified for the multi-LLM support
 
-    def generate_hypotheses(self, count: int = 5, strategies: Optional[List[str]] = None) -> List[str]:
+    def generate_hypotheses(self, count: int = 5, strategies: Optional[List[str]] = None,
+                            batch_size: int = 1) -> List[str]:
         """
         Generate a specified number of research hypotheses.
 
@@ -359,14 +360,22 @@ class CoScientist:
             strategies: Optional list of generation strategies to use
                         ("literature_exploration", "scientific_debate",
                          "assumptions_identification", "research_expansion")
+            batch_size: Hypotheses to request per LLM call. 1 (default) is the
+                        original one-hypothesis-per-call behaviour. >1 schedules
+                        ceil(count/batch_size) tasks, each asking the model for a
+                        batch in a single call -- amortises the (reasoning) call
+                        overhead across the batch. The generation agent enforces
+                        intra-batch distinctness; see GenerationAgent._generate_hypothesis.
 
         Returns:
             List of generated hypothesis IDs
         """
-        self.logger.info(f"Scheduling generation of {count} hypotheses")
+        self.logger.info(f"Scheduling generation of {count} hypotheses (batch_size={batch_size})")
 
         if not self.memory.metadata.get("research_goal"):
             raise ValueError("Research goal must be set before generating hypotheses")
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
 
         # Default strategies if none provided
         all_strategies = ["literature_exploration", "scientific_debate",
@@ -380,11 +389,16 @@ class CoScientist:
         else:
             strategies = all_strategies
 
-        # Create tasks for hypothesis generation
+        # Create tasks for hypothesis generation. Each task produces `n_this`
+        # hypotheses in one call; ceil(count/batch_size) tasks cover `count`,
+        # with the last task carrying the remainder so the total is exact.
+        import math
         hypothesis_ids = []
-        for i in range(count):
+        n_tasks = math.ceil(count / batch_size)
+        for i in range(n_tasks):
             # Cycle through strategies
             strategy = strategies[i % len(strategies)]
+            n_this = min(batch_size, count - i * batch_size)
 
             task = Task(
                 task_type="generate_hypothesis",
@@ -392,7 +406,8 @@ class CoScientist:
                 priority=1,
                 params={
                     "strategy": strategy,
-                    "research_goal": self.research_goal
+                    "research_goal": self.research_goal,
+                    "batch_size": n_this
                 }
             )
 
@@ -480,20 +495,52 @@ class CoScientist:
 
         return {"tasks_created": tasks_created, "hypotheses_count": len(hypotheses)}
 
+    def _swiss_pairings(self, hypotheses: List) -> List:
+        """One Swiss round: sort by current Elo, pair neighbours (1-2, 3-4, ...).
+
+        Reads live ``elo_rating``, so the standings reflect every match recorded
+        so far; the caller runs one round, lets the ratings update, then calls
+        again for the next round. An odd field leaves the lowest-ranked
+        hypothesis with a bye for this round.
+        """
+        ranked = sorted(hypotheses, key=lambda h: h.elo_rating, reverse=True)
+        return [(ranked[i], ranked[i + 1]) for i in range(0, len(ranked) - 1, 2)]
+
+    def _build_pairings(self, hypotheses: List, scheme: str,
+                        match_count: int) -> List:
+        """Return the (h1, h2) pairs to play this call for the given scheme.
+
+        - ``"random"``: ``match_count`` independent random pairs (the historical
+          behaviour -- every match for the call is scheduled at once).
+        - ``"swiss"``: one Swiss round of neighbour pairings by current Elo;
+          ``match_count`` is ignored because a round's size is set by the field.
+        """
+        import random
+        if scheme == "swiss":
+            return self._swiss_pairings(hypotheses)
+        if scheme == "random":
+            return [tuple(random.sample(hypotheses, 2)) for _ in range(match_count)]
+        raise ValueError(f"unknown tournament scheme: {scheme!r}")
+
     def run_tournament(self, match_count: int = 10,
-                      hypothesis_ids: Optional[List[str]] = None) -> Dict:
+                      hypothesis_ids: Optional[List[str]] = None,
+                      scheme: str = "random") -> Dict:
         """
         Schedule tournament matches to compare and rank hypotheses.
 
         Args:
-            match_count: Number of tournament matches to schedule
+            match_count: Number of tournament matches to schedule (``"random"``
+                         scheme only; ignored by ``"swiss"``)
             hypothesis_ids: Optional list of hypothesis IDs to include in the tournament
                            (if None, includes all hypotheses)
+            scheme: Pairing scheme -- ``"random"`` (default, unchanged behaviour)
+                    or ``"swiss"`` (one neighbour-paired round by current Elo)
 
         Returns:
             Dictionary with tournament information
         """
-        self.logger.info(f"Scheduling {match_count} tournament matches")
+        self.logger.info(
+            f"Scheduling tournament matches (scheme={scheme}, match_count={match_count})")
 
         # Get hypotheses for the tournament
         if hypothesis_ids:
@@ -509,13 +556,13 @@ class CoScientist:
         agent_state = self.memory.get_agent_state("proximity-0") or {}
         similarity_cache = agent_state.get("similarity_cache", {})
 
-        # Schedule tournament matches
-        for _ in range(match_count):
-            # Simple random selection for now
-            # In a real implementation, this would use proximity data and more sophisticated selection
-            import random
-            h1, h2 = random.sample(hypotheses, 2)
+        # Build the pairings for this call according to the scheme, then
+        # schedule one match task per pair. For "swiss" this is exactly one
+        # round; the caller re-invokes per round so later pairings see the Elo
+        # the earlier rounds produced.
+        pairings = self._build_pairings(hypotheses, scheme, match_count)
 
+        for h1, h2 in pairings:
             task = Task(
                 task_type="tournament_match",
                 agent_type="ranking",
@@ -538,7 +585,8 @@ class CoScientist:
         self.supervisor.add_task(update_task)
 
         return {
-            "match_count": match_count,
+            "scheme": scheme,
+            "match_count": len(pairings),
             "hypotheses_count": len(hypotheses)
         }
 

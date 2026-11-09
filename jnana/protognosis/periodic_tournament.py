@@ -49,6 +49,44 @@ def _await_matches(
         time.sleep(poll_seconds)
 
 
+def _run_swiss_rounds(
+    coscientist: CoScientist,
+    rounds: int,
+    max_seconds: float | None,
+) -> str:
+    """Run ``rounds`` sequential Swiss rounds, blocking on each before the next.
+
+    Each round is paired from the CURRENT Elo standings, which the ranking agent
+    updates per match (see ``specialized_agents._tournament_match``). So a round
+    must finish recording before the next is paired -- otherwise later rounds
+    pair on stale ratings and Swiss degenerates to random. ``_await_matches``
+    is that barrier.
+
+    The ``max_seconds`` budget is split evenly across rounds so one slow round
+    cannot starve the rest. The last stop reason reached is returned; a deadline
+    in any round stops the loop and yields whatever ranking exists.
+
+    Note: like the random path, the barrier counts ALL new matches, including
+    any the ensemble's own ranking agents record. A round can therefore clear
+    on fewer of its own pairings than it scheduled; ``match_count`` has always
+    been a bound here, not an exact quota.
+    """
+    if rounds < 1:
+        raise ValueError("rounds must be at least one")
+    round_deadline = None if max_seconds is None else max_seconds / rounds
+    stop_reason = "not_requested"
+    for _ in range(rounds):
+        before = len(coscientist.memory.tournament_state.get("matches", []))
+        info = coscientist.run_tournament(scheme="swiss")
+        wanted = int(info.get("match_count") or 0)
+        if wanted == 0:
+            return "no_pairings"
+        stop_reason = _await_matches(coscientist, before, wanted, round_deadline)
+        if stop_reason == "deadline_reached":
+            break
+    return stop_reason
+
+
 def _compact_hypothesis(hypothesis: dict[str, Any]) -> dict[str, Any]:
     """Return ranking data without exposing full hypothesis bodies."""
 
@@ -67,6 +105,9 @@ def run_incremental_tournament(
     match_count: int = 1,
     top_k: int = 3,
     max_seconds: float | None = None,
+    scheme: str = "random",
+    rounds: int = 1,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Run and persist one bounded tournament iteration.
 
@@ -79,19 +120,44 @@ def run_incremental_tournament(
     allocation always gets a ranking and a selection back. Leave ``max_seconds``
     as ``None`` only when the caller has no deadline at all; see
     :func:`_await_matches` for why an unbounded wait does not terminate.
+
+    ``scheme`` selects the pairing: ``"random"`` (default, unchanged -- a single
+    batch of ``match_count`` random matches) or ``"swiss"``, which plays
+    ``rounds`` sequential Swiss rounds, re-pairing on the current Elo between
+    rounds (``match_count`` does not apply). "Deep Swiss" is just a larger
+    ``rounds``.
+
+    ``workers`` runs a round's matches in parallel (the round-synchronous
+    multi-dueling pattern). This is only offered for ``"swiss"``: a Swiss round's
+    pairings are DISJOINT (each hypothesis plays once), so concurrent matches
+    never touch the same Elo rating, and ``ContextMemory``'s lock serializes the
+    shared match list and the JSON save. The between-round barrier
+    (:func:`_await_matches`) still holds -- round r+1 is not paired until round
+    r's matches are all recorded, so later rounds pair on complete standings.
+    ``"random"`` pairs can overlap, so it stays serial.
     """
 
     if match_count < 0:
         raise ValueError("match_count must be non-negative")
     if top_k < 1:
         raise ValueError("top_k must be at least one")
+    if scheme not in ("random", "swiss"):
+        raise ValueError(f"unknown tournament scheme: {scheme!r}")
+    if scheme == "swiss" and rounds < 1:
+        raise ValueError("rounds must be at least one for the swiss scheme")
+    if workers < 1:
+        raise ValueError("workers must be at least one")
+    if workers > 1 and scheme != "swiss":
+        # Random pairs can share a hypothesis, so parallel matches would race on
+        # its Elo (read-modify-write). Only Swiss guarantees disjoint pairings.
+        raise ValueError("workers > 1 is only supported for the swiss scheme")
 
     state_path = Path(state_file).expanduser()
     state_path.parent.mkdir(parents=True, exist_ok=True)
     coscientist = CoScientist(
         llm_config=llm_config,
         storage_path=str(state_path),
-        max_workers=1,
+        max_workers=workers,
     )
     coscientist.start()
     try:
@@ -108,7 +174,11 @@ def run_incremental_tournament(
 
         before_matches = len(coscientist.memory.tournament_state.get("matches", []))
         stop_reason = "not_requested"
-        if match_count:
+        if scheme == "swiss":
+            # Swiss owns its own round loop; each round pairs on the Elo the
+            # previous round produced. match_count does not apply.
+            stop_reason = _run_swiss_rounds(coscientist, rounds, max_seconds)
+        elif match_count:
             coscientist.run_tournament(match_count=match_count)
             stop_reason = _await_matches(
                 coscientist, before_matches, match_count, max_seconds)
@@ -140,6 +210,7 @@ def run_incremental_tournament(
         status = "completed" if ranked else "incomplete"
         result = {
             "status": status,
+            "scheme": scheme,
             "stop_reason": stop_reason,
             "hypothesis_count": hypothesis_count,
             "matches_requested": match_count,
@@ -147,8 +218,18 @@ def run_incremental_tournament(
             "top_hypotheses": ranked,
             "statistics": statistics,
         }
+        if scheme == "swiss":
+            result["rounds_requested"] = rounds
         if status == "incomplete":
             result["reason"] = "tournament produced no ranked hypotheses"
+        elif scheme == "swiss":
+            # match_count is not a Swiss quota; partial means a deadline cut the
+            # round loop short before all `rounds` were played.
+            if stop_reason == "deadline_reached":
+                result["partial"] = (
+                    f"ranking from Swiss rounds cut short by deadline "
+                    f"({matches_completed} matches played)"
+                )
         elif matches_completed < match_count:
             # Usable, but say plainly that it was cut short.
             result["partial"] = (

@@ -375,12 +375,28 @@ class OpenAILLM(LLMInterface):
         }
         if not (self.model_adapter or {}).get("omit_temperature", False):
             request["temperature"] = temperature
+        # Reasoning-model knob (2026-11): for a reasoning model (e.g. luna) most
+        # of the latency is hidden reasoning tokens, not the visible output.
+        # Pass it through only when the adapter sets it, so non-reasoning
+        # endpoints (e.g. the Llama ranking judge) never receive the param.
+        reasoning_effort = (self.model_adapter or {}).get("reasoning_effort")
+        if reasoning_effort:
+            request["reasoning_effort"] = reasoning_effort
         response = self.client.chat.completions.create(**request)
 
         # Extract JSON string and parse
         import json
         try:
             content = response.choices[0].message.content
+            # Strip markdown code fences if the model wrapped its JSON in them
+            # (argo gpt-4o does this even with response_format=json_object; vLLM
+            # models like Sophia do not). Matches the other adapters' behaviour.
+            if content and "```" in content:
+                if "```json" in content:
+                    content = content.split("```json", 1)[1].split("```", 1)[0]
+                else:
+                    content = content.split("```", 1)[1].split("```", 1)[0]
+                content = content.strip()
             parsed_response = json.loads(content)
 
             # Get token counts from OpenAI-compatible responses when available.
