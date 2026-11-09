@@ -105,24 +105,53 @@ class GenerationAgent(Agent):
                 prompt = self._create_research_expansion_prompt(research_goal, plan_config, top_summaries)
             else:
                 raise ValueError(f"Unknown generation strategy: {strategy}")
-        
+
+        # Conciseness directive appended to every strategy's prompt (2026-11):
+        # keep `content` tight and readable so downstream consumers (ranking
+        # match prompt, loam validator statement) get the idea without wading
+        # through filler.
+        prompt = prompt + (
+            "\n\nWrite the hypothesis to be concise and easy to understand. State the "
+            "core idea directly in plain, specific language; avoid redundancy, hedging, "
+            "and filler. Keep `content` to roughly 120-180 words, self-contained, and "
+            "focused on the mechanism and why it would work. Keep `summary` to 1-2 "
+            "sentences and each testable prediction to one sentence."
+        )
+
         # Generate hypothesis using the LLM
-        system_prompt = self.fill_prompt_template("system", 
+        system_prompt = self.fill_prompt_template("system",
                                                 agent_type="generation",
                                                 role="generate novel research hypotheses")
         
-        # Define the expected output schema
-        schema = {
-            "hypothesis": {
-                "title": "string",
-                "content": "string",
-                "summary": "string",
-                "key_novelty_aspects": ["string"],
-                "testable_predictions": ["string"]
-            },
-            "explanation": "string",
-            "generation_strategy": "string"
+        # Define the expected output schema.
+        # Trimmed (2026-11): dropped `explanation`, `generation_strategy` and
+        # `key_novelty_aspects` from what the model must emit. Downstream nothing
+        # reads them -- the ranking match prompt uses `content` only and the loam
+        # validator statement uses `content`+`summary` -- so generating them cost
+        # ~990 output tokens/hypothesis on the reasoner for no consumer. `content`
+        # (+`summary`, +`testable_predictions` for validators) is kept.
+        hyp_schema = {
+            "title": "string",
+            "content": "string",
+            "summary": "string",
+            # "key_novelty_aspects": ["string"],   # commented out 2026-11: unread downstream
+            "testable_predictions": ["string"]
         }
+
+        # Batching (2026-11): with batch_size > 1, ask for an ARRAY of distinct
+        # hypotheses in ONE call so the (reasoning) call overhead is amortised
+        # across the batch. batch_size == 1 keeps the original single-object
+        # schema and behaviour exactly.
+        n = int(task.params.get("batch_size", 1) or 1)
+        if n > 1:
+            schema = {"hypotheses": [hyp_schema]}
+            prompt = prompt + (
+                f"\n\nGenerate exactly {n} DISTINCT hypotheses that differ substantively "
+                "in mechanism or design principle (not rephrasings of one idea). Return "
+                "them as the JSON array `hypotheses`."
+            )
+        else:
+            schema = {"hypothesis": hyp_schema}
         
         try:
             # Generate the hypothesis with the LLM
@@ -141,22 +170,38 @@ class GenerationAgent(Agent):
                 response = response_data
                 self.total_calls += 1
             
-            # Create a new hypothesis object
-            hypothesis = ResearchHypothesis(
-                content=response["hypothesis"]["content"],
-                summary=response["hypothesis"]["summary"],
-                agent_id=self.agent_id,
-                metadata={
-                    "title": response["hypothesis"]["title"],
-                    "key_novelty_aspects": response["hypothesis"]["key_novelty_aspects"],
-                    "testable_predictions": response["hypothesis"]["testable_predictions"],
-                    "generation_strategy": response["generation_strategy"],
-                    "explanation": response["explanation"]
-                }
-            )
-            
-            # Add the hypothesis to memory
-            self.memory.add_hypothesis(hypothesis)
+            # Normalize the response to a list of hypothesis dicts: one for
+            # batch_size == 1, the `hypotheses` array for a batch. Then build
+            # and store each. `hypothesis` (the last created) is used below for
+            # per-task bookkeeping; `created` holds the whole batch.
+            if n > 1:
+                items = response.get("hypotheses") or []
+            else:
+                items = [response["hypothesis"]] if response.get("hypothesis") else []
+            if not items:
+                raise ValueError("LLM returned no hypotheses")
+
+            created = []
+            for item in items:
+                hypothesis = ResearchHypothesis(
+                    content=item["content"],
+                    summary=item["summary"],
+                    agent_id=self.agent_id,
+                    metadata={
+                        "title": item.get("title", ""),
+                        # "key_novelty_aspects": item.get("key_novelty_aspects", []),  # commented out 2026-11
+                        "testable_predictions": item.get("testable_predictions", []),
+                        # Provenance kept cheaply: the actual strategy label, not an
+                        # LLM-generated essay. explanation/key_novelty_aspects were
+                        # commented out of the schema (nothing downstream read them).
+                        # "explanation": item.get("explanation", ""),  # commented out 2026-11
+                        "generation_strategy": strategy,  # was: response.get("generation_strategy", "")
+                        "batch_id": task.task_id,  # provenance: which call produced this (intra-batch analysis)
+                    }
+                )
+                # Add the hypothesis to memory
+                self.memory.add_hypothesis(hypothesis)
+                created.append(hypothesis)
 
             # Update agent state
             try:
@@ -165,9 +210,9 @@ class GenerationAgent(Agent):
                 self.logger.info(f"Current agent state: {agent_state}")
                 agent_state.update({
                     "last_activity": time.time(),
-                    "hypotheses_generated": agent_state.get("hypotheses_generated", 0) + 1,
+                    "hypotheses_generated": agent_state.get("hypotheses_generated", 0) + len(created),
                     "last_strategy": strategy,
-                    "last_hypothesis_id": hypothesis.hypothesis_id,
+                    "last_hypothesis_id": created[-1].hypothesis_id,
                     "total_tasks_completed": agent_state.get("total_tasks_completed", 0) + 1
                 })
                 self.logger.info(f"Updated agent state: {agent_state}")
@@ -185,15 +230,16 @@ class GenerationAgent(Agent):
                     "agent_id": self.agent_id,
                     "strategy": strategy,
                     "research_goal": research_goal,
-                    "hypothesis_generated": hypothesis.hypothesis_id,
+                    "hypothesis_generated": [h.hypothesis_id for h in created],
+                    "batch_size": len(created),
                     "generation_time": time.time(),
                     "input_parameters": task.params,
                     "output_quality_metrics": {
-                        "content_length": len(hypothesis.content),
-                        "summary_length": len(hypothesis.summary),
+                        "content_length": sum(len(h.content) for h in created) / len(created),
+                        "summary_length": sum(len(h.summary) for h in created) / len(created),
                         "strategy_alignment": 1.0,  # Could be computed based on strategy adherence
-                        "novelty_aspects_count": len(response["hypothesis"].get("key_novelty_aspects", [])),
-                        "testable_predictions_count": len(response["hypothesis"].get("testable_predictions", []))
+                        "testable_predictions_count": sum(
+                            len(h.metadata.get("testable_predictions", [])) for h in created) / len(created)
                     }
                 }
                 self.memory.set_dataset(task.task_id, dataset)
@@ -203,8 +249,10 @@ class GenerationAgent(Agent):
                 # Don't raise - this shouldn't fail the task
 
             return {
-                "hypothesis_id": hypothesis.hypothesis_id,
-                "summary": hypothesis.summary,
+                "hypothesis_id": created[0].hypothesis_id,
+                "hypothesis_ids": [h.hypothesis_id for h in created],
+                "count": len(created),
+                "summary": created[0].summary,
                 "strategy": strategy
             }
             

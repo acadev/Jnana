@@ -119,6 +119,13 @@ class ContextMemory:
             storage_path: Optional path to a JSON file for persistence
         """
         self.storage_path = storage_path
+        # Guards the shared containers and the whole-file save so parallel
+        # tournament workers (max_workers > 1) cannot interleave JSON writes or
+        # mutate a dict/list mid-serialize. Re-entrant because update_hypothesis
+        # -> _save_if_needed -> save all take it. Within a Swiss round the Elo
+        # writes themselves are race-free (disjoint pairings), so the lock only
+        # has to serialize the persistence, not the rating math.
+        self._lock = threading.RLock()
         self.hypotheses = {}  # Map of hypothesis_id to ResearchHypothesis
         self.experiments = {}  # Map of experiment_id to Experiment
         self.analyses = {}  # Map of analysis_id to Analysis
@@ -181,32 +188,38 @@ class ContextMemory:
         """Save memory to storage."""
         if not self.storage_path:
             return
-        
+
         try:
-            # Convert hypotheses to dictionaries
-            hypotheses_data = [h.to_dict() for h in self.hypotheses.values()]
-            
-            # Prepare data for saving
-            data = {
-                'hypotheses': hypotheses_data,
-                'experiments': self.experiments,
-                'analyses': self.analyses,
-                'papers': self.papers,
-                'metadata': self.metadata,
-                'agent_states': self.agent_states,
-                'datasets': self.datasets,
-                'training_plans': self.training_plans,
-                'evaluations': self.evaluations,
-                'tournament_state': self.tournament_state
-            }
-            
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(os.path.abspath(self.storage_path)), exist_ok=True)
-            
-            # Save to file
-            with open(self.storage_path, 'w') as f:
-                json.dump(data, f, indent=2)
-            
+            # Hold the lock across BOTH the serialize and the write: snapshotting
+            # the dicts/lists while another worker appends a match or updates a
+            # hypothesis would otherwise raise "changed size during iteration" or
+            # emit a half-written file. The lock is held only for this fast
+            # in-memory serialize + file write, not for the LLM match call.
+            with self._lock:
+                # Convert hypotheses to dictionaries
+                hypotheses_data = [h.to_dict() for h in self.hypotheses.values()]
+
+                # Prepare data for saving
+                data = {
+                    'hypotheses': hypotheses_data,
+                    'experiments': self.experiments,
+                    'analyses': self.analyses,
+                    'papers': self.papers,
+                    'metadata': self.metadata,
+                    'agent_states': self.agent_states,
+                    'datasets': self.datasets,
+                    'training_plans': self.training_plans,
+                    'evaluations': self.evaluations,
+                    'tournament_state': self.tournament_state
+                }
+
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(os.path.abspath(self.storage_path)), exist_ok=True)
+
+                # Save to file
+                with open(self.storage_path, 'w') as f:
+                    json.dump(data, f, indent=2)
+
             logging.info(f"Saved memory to {self.storage_path}")
         except Exception as e:
             logging.error(f"Error saving memory to {self.storage_path}: {str(e)}")
@@ -244,9 +257,10 @@ class ContextMemory:
         Args:
             hypothesis: The hypothesis to add
         """
-        self.hypotheses[hypothesis.hypothesis_id] = hypothesis
-        self._save_if_needed()
-    
+        with self._lock:
+            self.hypotheses[hypothesis.hypothesis_id] = hypothesis
+            self._save_if_needed()
+
     def get_hypothesis(self, hypothesis_id: str) -> Optional[ResearchHypothesis]:
         """
         Get a hypothesis by ID.
@@ -275,9 +289,10 @@ class ContextMemory:
         Args:
             hypothesis: The hypothesis to update
         """
-        self.hypotheses[hypothesis.hypothesis_id] = hypothesis
-        self._save_if_needed()
-    
+        with self._lock:
+            self.hypotheses[hypothesis.hypothesis_id] = hypothesis
+            self._save_if_needed()
+
     def get_agent_state(self, agent_id: str) -> Optional[Dict]:
         """
         Get the state of an agent.
@@ -429,9 +444,10 @@ class ContextMemory:
         Args:
             match: The match to add
         """
-        self.tournament_state["matches"].append(match)
-        self._save_if_needed()
-    
+        with self._lock:
+            self.tournament_state["matches"].append(match)
+            self._save_if_needed()
+
     def get_tournament_matches(self) -> List[Dict]:
         """
         Get all tournament matches.
@@ -448,8 +464,9 @@ class ContextMemory:
         Args:
             tournament_state: The new tournament state
         """
-        self.tournament_state = tournament_state
-        self._save_if_needed()
+        with self._lock:
+            self.tournament_state = tournament_state
+            self._save_if_needed()
 
     def get_experiment(self, experiment_id: str) -> Optional[Dict]:
         """
